@@ -1,0 +1,9 @@
+blank = _{ " " | "\t" | NEWLINE }
+expr = _{ list | atom }
+program = { SOI ~ blank* ~ expr? ~ (blank+ ~ expr)* ~ blank* }
+list = { "(" ~ blank* ~ expr? ~ (blank+ ~ expr)* ~ blank* ~ ")" }
+atom = _{ nil | float | integer | symbol }
+nil = { "Nil" }
+integer = @{ "-"? ~ ASCII_DIGIT+ }
+float = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
+symbol = @{ ASCII_ALPHA ~ ("-" | ASCII_ALPHANUMERIC)* }
