@@ -37,7 +37,8 @@ impl fmt::Display for Expr {
     }
 }
 
-// After, I should implement '(1 2 3) as a sntax sugar to (quote (1 2 3))
+// After, I should implement '(1 2 3) as a syntax sugar to (quote (1 2 3))
+// And (define sum (a b) (+ a b)) as a syntax sugar to (define sum (lambda (a b) (+ a b)))
 pub fn parse(input: String) -> Result<Expr, String> {
     match LispParser::parse(Rule::program, &input) {
         Ok(mut pairs) => match pairs.next() {
