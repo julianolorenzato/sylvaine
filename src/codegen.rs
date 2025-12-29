@@ -1,5 +1,6 @@
 use crate::parser::Expr;
 use rand::Rng;
+use std::{collections::HashMap, fs};
 use wasm_encoder::{
     CodeSection, FuncType, Function, FunctionSection, Instruction, Module, NameMap, NameSection,
     RefType, TableSection, TableType, TypeSection, ValType,
@@ -26,6 +27,7 @@ struct Symbol {
 
 struct Environment {
     scopes: Vec<HashMap<String, Symbol>>,
+    lambdas_count: u32,
 }
 
 impl Environment {
@@ -33,6 +35,7 @@ impl Environment {
         Self {
             // intialize with the top level scope
             scopes: vec![HashMap::new()],
+            lambdas_count: 0,
         }
     }
 
@@ -42,6 +45,7 @@ impl Environment {
 
     fn push_scope(&mut self) {
         self.scopes.push(HashMap::new());
+        self.lambdas_count += 1;
     }
 
     fn pop_scope(&mut self) {
@@ -80,40 +84,12 @@ impl Environment {
 }
 
 pub fn codegen(ast: &Expr) {
-    let mut env = Environment::new();
-
     let mut module = Module::new();
-
-    // Names
     let mut names = NameSection::new();
-    names.module("sylvaine_generated");
-    let mut function_names = NameMap::new();
-    function_names.append(0, "main");
-    names.functions(&function_names);
-
-    // Tables
     let mut tables = TableSection::new();
-    tables.table(TableType {
-        element_type: RefType::FUNCREF,
-        table64: true,
-        minimum: 1,
-        maximum: None,
-        shared: false,
-    });
-
-    // Types
     let mut types = TypeSection::new();
-    types.ty().func_type(&FuncType::new([], [ValType::I32]));
-
-    // Functions
     let mut functions = FunctionSection::new();
-    functions.function(99);
-
-    // Code
-    let mut main_function = Function::new([(2, ValType::F64)]);
-    main_function.instruction(&Instruction::End);
     let mut code = CodeSection::new();
-    code.function(&main_function);
 
     module
         .section(&types)
@@ -122,7 +98,48 @@ pub fn codegen(ast: &Expr) {
         .section(&code)
         .section(&names);
 
-    // compile_expr(ast, &mut module, &mut env);
+    names.module("sylvaine_generated");
+
+    // Naming functions
+    let mut function_names = NameMap::new();
+    function_names.append(0, "main");
+    names.functions(&function_names);
+
+    // Create closure table
+    tables.table(TableType {
+        element_type: RefType::FUNCREF,
+        table64: true,
+        minimum: 1,
+        maximum: None,
+        shared: false,
+    });
+
+    // Define function types
+    types.ty().func_type(&FuncType::new([], [ValType::I32]));
+    types
+        .ty()
+        .func_type(&FuncType::new([ValType::I32, ValType::I32], [ValType::I32]));
+
+    // Define functions
+    functions.function(99).function(0);
+
+    // Define functions body
+    let mut main_function = Function::new([(2, ValType::F64)]);
+    main_function.instruction(&Instruction::End);
+
+    let mut add_function = Function::new([]);
+    add_function
+        .instruction(&Instruction::LocalGet(0))
+        .instruction(&Instruction::LocalGet(1))
+        .instruction(&Instruction::I32Add)
+        .instruction(&Instruction::End);
+
+    code.function(&main_function).function(&add_function);
+
+    // Generate WASM
+    let mut env = Environment::new();
+    compile_top_level(ast, &mut env, &mut types, &mut functions, &mut code);
+    // compile_expr(ast, &mut module, &mut env, &mut main_function);
 
     let bin_wasm = module.finish();
 
@@ -131,7 +148,13 @@ pub fn codegen(ast: &Expr) {
     println!("{wat}");
 }
 
-fn compile_top_level(ast: &Expr, module: &mut Module, env: &mut Environment) {
+fn compile_top_level(
+    ast: &Expr,
+    env: &mut Environment,
+    types: &mut TypeSection,
+    funcs: &mut FunctionSection,
+    code: &mut CodeSection,
+) {
     match ast {
         Expr::List(xs) => match xs.as_slice() {
             [Expr::Symbol(s), ..] if s == "define" && env.scope_level() != 0 => {
@@ -142,20 +165,7 @@ fn compile_top_level(ast: &Expr, module: &mut Module, env: &mut Environment) {
             {
                 let idx = env.define_local(name.to_string(), ValType::I32);
 
-                let mut types = TypeSection::new();
-                types.ty().function([], [ValType::I32]);
-
-                let mut functions = FunctionSection::new();
-                functions.function(idx);
-
-                let mut func = Function::new([]);
-
-                compile_expr(expr, module, env, &mut func);
-
-                let mut code = CodeSection::new();
-                code.function(&func);
-
-                module.section(&types).section(&functions).section(&code);
+                compile_expr(expr, env, types, funcs, code, None);
             }
             _ => (),
         },
@@ -163,7 +173,14 @@ fn compile_top_level(ast: &Expr, module: &mut Module, env: &mut Environment) {
     }
 }
 
-fn compile_expr(ast: &Expr, module: &mut Module, env: &mut Environment, func: &mut Function) {
+fn compile_expr(
+    ast: &Expr,
+    env: &mut Environment,
+    types: &mut TypeSection,
+    funcs: &mut FunctionSection,
+    code: &mut CodeSection,
+    current_fun: Option<&mut Function>,
+) {
     match ast {
         Expr::List(xs) => match xs.as_slice() {
             // [Expr::Symbol(s), ..] if s == "define" && env.scope_level() != 0 => {
@@ -181,6 +198,14 @@ fn compile_expr(ast: &Expr, module: &mut Module, env: &mut Environment, func: &m
             [Expr::Symbol(s), Expr::List(params), body] if s == "lambda" => {
                 env.push_scope();
 
+                let typed_params = vec![ValType::I32; params.len()];
+                types
+                    .ty()
+                    .func_type(&FuncType::new(typed_params, [ValType::I32]));
+                funcs.function(env.lambdas_count);
+                let mut fun = Function::new([]);
+                code.function(&fun);
+
                 for param in params {
                     if let Expr::Symbol(s) = param {
                         env.define_local(s.to_string(), ValType::I32);
@@ -188,6 +213,8 @@ fn compile_expr(ast: &Expr, module: &mut Module, env: &mut Environment, func: &m
                         panic!("param should be a symbol")
                     }
                 }
+
+                compile_expr(body, env, types, funcs, code, &mut fun);
 
                 env.pop_scope();
             }
@@ -205,9 +232,8 @@ fn compile_expr(ast: &Expr, module: &mut Module, env: &mut Environment, func: &m
             _ => todo!(),
         },
         Expr::Integer(n) => {
-            let instr = Instruction::I32Const(*n);
-
-            // module.section(section)
+            if 
+            current_fun.instruction(&Instruction::I32Const(*n));
         }
         _ => todo!(),
     }
@@ -241,8 +267,6 @@ fn compile_expr(ast: &Expr, module: &mut Module, env: &mut Environment, func: &m
 //     }
 //     vec![2, 3]
 // }
-
-use std::{collections::HashMap, fs, thread::scope, vec};
 
 pub fn gen_webassembly_code(ast: Expr) -> String {
     // let mut code: Vec<u8> = vec![];
