@@ -1,15 +1,20 @@
-use crate::parser::Expr;
+use crate::lowering::Expr;
 use rand::Rng;
-use std::{collections::HashMap, fs};
+use std::{
+    collections::HashMap,
+    fs,
+};
 use wasm_encoder::{
-    CodeSection, FuncType, Function, FunctionSection, Instruction, Module, NameMap, NameSection,
-    RefType, TableSection, TableType, TypeSection, ValType,
+    CodeSection, ConstExpr, FuncType, Function, FunctionSection, GlobalSection, GlobalType,
+    Instruction, Module, NameMap, NameSection, RefType, TableSection, TableType, TypeSection,
+    ValType,
 };
 
-// enum Type {
-//     Val(ValType),
-//     Ref(RefType),
-// }
+#[derive(Debug, Clone)]
+enum Kind {
+    Lambda,
+    Integer,
+}
 
 fn random_hash(len: usize) -> String {
     let mut rng = rand::rng();
@@ -20,8 +25,9 @@ fn random_hash(len: usize) -> String {
 
 #[derive(Debug, Clone)]
 struct Symbol {
-    level: u32,
-    vt: ValType,
+    // level: u32,
+    kind: Kind,
+    // vt: ValType,
     // closure: bool,
 }
 
@@ -54,16 +60,15 @@ impl Environment {
         }
     }
 
-    fn define_local(&mut self, name: String, vt: ValType) -> u32 {
+    fn define_local(&mut self, name: String, kind: Kind) -> u32 {
         let idx = (self.scopes.len() + 1) as u32;
 
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(
                 name,
                 Symbol {
-                    level: idx,
-                    vt,
-                    // closure,
+                    // level: idx,
+                    kind,
                 },
             );
         } else {
@@ -85,20 +90,23 @@ impl Environment {
 
 pub fn codegen(ast: &Expr) {
     let mut module = Module::new();
-    let mut names = NameSection::new();
-    let mut tables = TableSection::new();
     let mut types = TypeSection::new();
     let mut functions = FunctionSection::new();
+    let mut tables = TableSection::new();
+    let mut globals = GlobalSection::new();
     let mut code = CodeSection::new();
-
-    module
-        .section(&types)
-        .section(&functions)
-        .section(&tables)
-        .section(&code)
-        .section(&names);
+    let mut names = NameSection::new();
 
     names.module("sylvaine_generated");
+
+    globals.global(
+        GlobalType {
+            val_type: ValType::I32,
+            mutable: false,
+            shared: false,
+        },
+        &ConstExpr::i32_const(34),
+    );
 
     // Naming functions
     let mut function_names = NameMap::new();
@@ -138,8 +146,16 @@ pub fn codegen(ast: &Expr) {
 
     // Generate WASM
     let mut env = Environment::new();
-    compile_top_level(ast, &mut env, &mut types, &mut functions, &mut code);
+    // compile_top_level(ast, &mut env, &mut types, &mut functions, &mut code);
     // compile_expr(ast, &mut module, &mut env, &mut main_function);
+
+    module
+        .section(&types)
+        .section(&functions)
+        .section(&tables)
+        .section(&globals)
+        .section(&code)
+        .section(&names);
 
     let bin_wasm = module.finish();
 
@@ -163,7 +179,39 @@ fn compile_top_level(
             [Expr::Symbol(s), Expr::Symbol(name), expr]
                 if s == "define" && env.scope_level() == 0 =>
             {
-                let idx = env.define_local(name.to_string(), ValType::I32);
+                match expr {
+                    Expr::List(items) => match items.as_slice() {
+                        [Expr::Symbol(s), Expr::List(params), body] if s == "lambda" => {
+                            env.define_local(name.to_string(), Kind::Lambda);
+
+                            let typed_params = vec![ValType::I32; params.len()];
+                            types
+                                .ty()
+                                .func_type(&FuncType::new(typed_params, [ValType::I32]));
+
+                            funcs.function(env.lambdas_count);
+
+                            let mut fun = Function::new([]);
+                            code.function(&fun);
+
+                            env.push_scope();
+                            for param in params {
+                                if let Expr::Symbol(s) = param {
+                                    env.define_local(s.to_string(), ValType::I32);
+                                } else {
+                                    panic!("param should be a symbol")
+                                }
+                            }
+                            compile_expr(body, env, types, funcs, code, Some(&mut fun));
+
+                            env.pop_scope();
+                        }
+                        [Expr::Symbol(s), args @ ..] => {}
+                        _ => panic!("cannot"),
+                    },
+                    Expr::Integer(n) => {}
+                    _ => {}
+                }
 
                 compile_expr(expr, env, types, funcs, code, None);
             }
@@ -179,7 +227,7 @@ fn compile_expr(
     types: &mut TypeSection,
     funcs: &mut FunctionSection,
     code: &mut CodeSection,
-    current_fun: Option<&mut Function>,
+    current_func: Option<&mut Function>,
 ) {
     match ast {
         Expr::List(xs) => match xs.as_slice() {
@@ -202,7 +250,9 @@ fn compile_expr(
                 types
                     .ty()
                     .func_type(&FuncType::new(typed_params, [ValType::I32]));
+
                 funcs.function(env.lambdas_count);
+
                 let mut fun = Function::new([]);
                 code.function(&fun);
 
@@ -214,17 +264,19 @@ fn compile_expr(
                     }
                 }
 
-                compile_expr(body, env, types, funcs, code, &mut fun);
+                compile_expr(body, env, types, funcs, code, Some(&mut fun));
 
                 env.pop_scope();
             }
             // lambda call
             [Expr::Symbol(s), args @ ..] => {
                 if let Some(symbol) = env.resolve(s) {
-                    // func.instruction(&Instruction::CallIndirect {
-                    //     type_index: (),
-                    //     table_index: (),
-                    // });
+                    if let Some(func) = current_func {
+                        func.instruction(Instruction::CallIndirect {
+                            type_index: (),
+                            table_index: (),
+                        })
+                    }
                 } else {
                     panic!("identifier {} not found", s);
                 }
@@ -232,8 +284,8 @@ fn compile_expr(
             _ => todo!(),
         },
         Expr::Integer(n) => {
-            if 
-            current_fun.instruction(&Instruction::I32Const(*n));
+            // if
+            // current_fun.instruction(&Instruction::I32Const(*n));
         }
         _ => todo!(),
     }
