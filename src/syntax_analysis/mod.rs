@@ -1,5 +1,5 @@
 mod desugar;
-mod lowering;
+mod lower;
 mod macro_expansion;
 
 use pest::{iterators::Pair, Parser};
@@ -20,13 +20,19 @@ pub enum SExpr {
 }
 
 // After, I should implement '(1 2 3) as a syntax sugar to (quote (1 2 3))
-pub fn parse(input: String) -> lowering::Expr {
+pub fn parse(input: String) -> lower::Expr {
     match LispParser::parse(Rule::program, &input) {
         Ok(mut pairs) => {
             let program = pairs.next().expect("Erro ao fazer o parse");
+
+            // source parsing
             let s_expr_ast = build_s_expression_ast(program);
+            // desugarizing
             let desugarized_s_expr_ast = desugar::desugar(s_expr_ast);
-            lowering::lower(desugarized_s_expr_ast)
+            // lowering
+            let lower_expr_ast = lower::lower(desugarized_s_expr_ast);
+
+            lower_expr_ast
         }
 
         Err(_err) => panic!("parse error"),
