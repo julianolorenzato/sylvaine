@@ -1,10 +1,9 @@
+use crate::syntax_analysis::SExpr;
 
-fn desugar(expr: SExpr) -> SExpr {
+pub fn desugar(expr: SExpr) -> SExpr {
     match expr {
         SExpr::List(list) => desugar_list(list),
-        SExpr::Prog(exprs) => {
-            SExpr::Prog(exprs.into_iter().map(desugar).collect())
-        }
+        SExpr::Prog(exprs) => SExpr::Prog(exprs.into_iter().map(desugar).collect()),
         other => other,
     }
 }
@@ -12,12 +11,7 @@ fn desugar(expr: SExpr) -> SExpr {
 fn desugar_list(list: Vec<SExpr>) -> SExpr {
     match list.as_slice() {
         // (define f (a b) body)
-        [
-            SExpr::Symbol(def),
-            SExpr::Symbol(name),
-            SExpr::List(params),
-            body,
-        ] if def == "define" => {
+        [SExpr::Symbol(def), SExpr::Symbol(name), SExpr::List(params), body] if def == "define" => {
             SExpr::List(vec![
                 SExpr::Symbol("define".into()),
                 SExpr::Symbol(name.clone()),

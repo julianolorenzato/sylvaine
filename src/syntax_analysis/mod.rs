@@ -1,3 +1,7 @@
+mod desugar;
+mod lowering;
+mod macro_expansion;
+
 use pest::{iterators::Pair, Parser};
 use pest_derive::Parser;
 
@@ -5,33 +9,34 @@ use pest_derive::Parser;
 #[grammar = "grammar.pest"]
 struct LispParser;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum SExpr {
     Integer(i32),
     Float(f64),
     Nil,
     Symbol(String),
     List(Vec<SExpr>),
-    Prog(Vec<SExpr>)
+    Prog(Vec<SExpr>),
 }
 
 // After, I should implement '(1 2 3) as a syntax sugar to (quote (1 2 3))
-// And (define sum (a b) (+ a b)) as a syntax sugar to (define sum (lambda (a b) (+ a b)))
-pub fn parse(input: String) -> Result<SExpr, String> {
+pub fn parse(input: String) -> lowering::Expr {
     match LispParser::parse(Rule::program, &input) {
-        Ok(mut pairs) => match pairs.next() {
-            Some(program) => Ok(build_sexpr_ast(program)),
-            None => Ok(SExpr::Nil),
-        },
+        Ok(mut pairs) => {
+            let program = pairs.next().expect("Erro ao fazer o parse");
+            let s_expr_ast = build_s_expression_ast(program);
+            let desugarized_s_expr_ast = desugar::desugar(s_expr_ast);
+            lowering::lower(desugarized_s_expr_ast)
+        }
 
-        Err(err) => Err("Erro ao fazer o parse".to_string()),
+        Err(_err) => panic!("parse error"),
     }
 }
 
-fn build_sexpr_ast(pair: Pair<Rule>) -> SExpr {
+fn build_s_expression_ast(pair: Pair<Rule>) -> SExpr {
     match pair.as_rule() {
         Rule::program => {
-            let exprs = pair.into_inner().map(build_sexpr_ast).collect();
+            let exprs = pair.into_inner().map(build_s_expression_ast).collect();
             SExpr::Prog(exprs)
         }
         Rule::symbol => SExpr::Symbol(pair.as_str().to_string()),
@@ -39,7 +44,7 @@ fn build_sexpr_ast(pair: Pair<Rule>) -> SExpr {
         Rule::integer => SExpr::Integer(pair.as_str().parse().unwrap()),
         Rule::float => SExpr::Float(pair.as_str().parse().unwrap()),
         Rule::list => {
-            let list = pair.into_inner().map(build_sexpr_ast).collect();
+            let list = pair.into_inner().map(build_s_expression_ast).collect();
             SExpr::List(list)
         }
         _ => unreachable!(),
