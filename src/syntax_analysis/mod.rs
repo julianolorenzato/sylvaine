@@ -1,5 +1,5 @@
 mod desugar;
-mod lower;
+pub mod lower;
 mod macro_expansion;
 
 use pest::{iterators::Pair, Parser};
@@ -56,3 +56,7 @@ fn build_s_expression_ast(pair: Pair<Rule>) -> SExpr {
         _ => unreachable!(),
     }
 }
+
+// type SymbolTable
+
+// fn build_symbol_table(ast: Expr) -> 

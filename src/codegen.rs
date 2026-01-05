@@ -1,10 +1,9 @@
-use crate::lowering::Expr;
+use crate::syntax_analysis::lower::Expr;
 use rand::Rng;
-use std::{collections::HashMap, fs};
 use wasm_encoder::{
-    CodeSection, ConstExpr, FuncType, Function, FunctionSection, GlobalSection, GlobalType, Ieee32,
-    Ieee64, Instruction, Module, NameMap, NameSection, RefType, TableSection, TableType,
-    TypeSection, ValType,
+    CodeSection, ConstExpr, FuncType, Function, FunctionSection, GlobalSection, GlobalType, Ieee64,
+    Instruction, Module, NameMap, NameSection, RefType, TableSection, TableType, TypeSection,
+    ValType,
 };
 
 #[derive(Debug, Clone)]
@@ -20,88 +19,17 @@ fn random_hash(len: usize) -> String {
         .collect()
 }
 
-#[derive(Debug, Clone)]
-struct Symbol {
-    // level: u32,
-    kind: Kind,
-    // vt: ValType,
-    // closure: bool,
-}
-
-struct Environment {
-    scopes: Vec<HashMap<String, Symbol>>,
-    lambdas_count: u32,
-}
-
-impl Environment {
-    fn new() -> Self {
-        Self {
-            // intialize with the top level scope
-            scopes: vec![HashMap::new()],
-            lambdas_count: 0,
-        }
-    }
-
-    fn scope_level(&self) -> u32 {
-        (self.scopes.len() - 1) as u32
-    }
-
-    fn push_scope(&mut self) {
-        self.scopes.push(HashMap::new());
-        self.lambdas_count += 1;
-    }
-
-    fn pop_scope(&mut self) {
-        if self.scope_level() != 0 {
-            self.scopes.pop();
-        }
-    }
-
-    fn define_local(&mut self, name: String, kind: Kind) -> u32 {
-        let idx = (self.scopes.len() + 1) as u32;
-
-        if let Some(scope) = self.scopes.last_mut() {
-            scope.insert(
-                name,
-                Symbol {
-                    // level: idx,
-                    kind,
-                },
-            );
-        } else {
-            panic!("define local")
-        }
-
-        idx
-    }
-
-    fn resolve(&self, name: &str) -> Option<Symbol> {
-        for scope in self.scopes.iter().rev() {
-            if let Some(info) = scope.get(name) {
-                return Some(info.clone());
-            }
-        }
-        None
-    }
-}
-
 pub fn codegen(ast: &Expr) {
-    let mut env = Environment::new();
     let mut wasm_code = WasmCode::new();
 
-    compile_top_level(ast, &mut wasm_code);
-    // compile_expr(ast, &mut module, &mut env, &mut main_function);
+    compile(ast, &mut wasm_code);
 
     let bin_wasm = wasm_code.finish();
 
     let wat = wasmprinter::print_bytes(bin_wasm).unwrap();
-
-    println!("{wat}");
 }
 
-fn compile_top_level(node: &Expr, wasm: &mut WasmCode) {
-    println!("{:?}", node);
-
+fn compile(node: &Expr, wasm: &mut WasmCode) {
     match node {
         Expr::Define(name, expr) => {
             // let func_type = FuncType::new(params, results)
@@ -114,7 +42,7 @@ fn compile_top_level(node: &Expr, wasm: &mut WasmCode) {
             //     Expr::
             // }
 
-            compile_top_level(expr, wasm);
+            compile(expr, wasm);
         }
         Expr::Float(n) => {
             wasm.float_value(*n);
@@ -135,7 +63,7 @@ fn compile_top_level(node: &Expr, wasm: &mut WasmCode) {
             wasm.open_function(0);
 
             for expression in expressions {
-                compile_top_level(expression, wasm);
+                compile(expression, wasm);
             }
 
             wasm.close_function();
@@ -152,7 +80,7 @@ fn compile_top_level(node: &Expr, wasm: &mut WasmCode) {
 
             // let type_idx = types.len() - 1;
 
-            compile_top_level(body, wasm);
+            compile(body, wasm);
         }
     }
 }
@@ -361,7 +289,6 @@ impl WasmCode {
     }
 
     fn float_value(&mut self, n: f64) {
-        println!("oii");
         let value = Ieee64::new(n.to_bits());
         let instruction = Instruction::F64Const(value);
         self.current_func.instruction(&instruction);
@@ -372,3 +299,60 @@ impl WasmCode {
         self.current_func.instruction(&instruction);
     }
 }
+
+// struct Environment {
+//     scopes: Vec<HashMap<String, Symbol>>,
+//     lambdas_count: u32,
+// }
+
+// impl Environment {
+//     fn new() -> Self {
+//         Self {
+//             // intialize with the top level scope
+//             scopes: vec![HashMap::new()],
+//             lambdas_count: 0,
+//         }
+//     }
+
+//     fn scope_level(&self) -> u32 {
+//         (self.scopes.len() - 1) as u32
+//     }
+
+//     fn push_scope(&mut self) {
+//         self.scopes.push(HashMap::new());
+//         self.lambdas_count += 1;
+//     }
+
+//     fn pop_scope(&mut self) {
+//         if self.scope_level() != 0 {
+//             self.scopes.pop();
+//         }
+//     }
+
+//     fn define_local(&mut self, name: String, kind: Kind) -> u32 {
+//         let idx = (self.scopes.len() + 1) as u32;
+
+//         if let Some(scope) = self.scopes.last_mut() {
+//             scope.insert(
+//                 name,
+//                 Symbol {
+//                     // level: idx,
+//                     kind,
+//                 },
+//             );
+//         } else {
+//             panic!("define local")
+//         }
+
+//         idx
+//     }
+
+//     fn resolve(&self, name: &str) -> Option<Symbol> {
+//         for scope in self.scopes.iter().rev() {
+//             if let Some(info) = scope.get(name) {
+//                 return Some(info.clone());
+//             }
+//         }
+//         None
+//     }
+// }

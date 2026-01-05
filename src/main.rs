@@ -1,5 +1,5 @@
-// mod codegen;
-// mod semantic_analysis;
+mod codegen;
+mod semantic_analysis;
 mod syntax_analysis;
 
 fn main() {
@@ -21,12 +21,4 @@ fn main() {
     let ast = syntax_analysis::parse(code.into());
 
     println!("{:#?}", ast);
-    // let (typed_ast, env) = type_checking::check(lower_ast);
-
-    // println!("{:#?}", ast);
-    // println!("{:#?}", typed_ast);
-    // println!("{:#?}", env);
-    // let typed_ast = type_checking::check(lower_ast);
-
-    // let wasm_code = codegen::codegen(&ast);
 }

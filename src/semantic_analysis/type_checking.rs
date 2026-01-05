@@ -20,12 +20,6 @@ pub struct TypedExpr {
     return_type: Type,
 }
 
-// #[derive(Clone)]
-// struct NameInfo {
-//     ty: Type,
-//     // scope: u32,
-// }
-
 #[derive(Debug)]
 pub struct Environment {
     scopes: Vec<HashMap<String, Type>>,
@@ -84,12 +78,6 @@ pub fn check(ast: Expr) -> (TypedExpr, Environment) {
     let mut env = Environment::new();
 
     (analyze(&ast, &mut env), env)
-}
-
-
-
-fn name_resolution() {
-
 }
 
 fn analyze(node: &Expr, env: &mut Environment) -> TypedExpr {
