@@ -1,0 +1,10 @@
+{
+  "tasks": {
+    "dev": "deno run --watch main.ts",
+    "build": "wasm-tools parse src/runtime.wat -o build/runtime.wasm"
+  },
+  "imports": {
+    "@build/": "./build/",
+    "@std/assert": "jsr:@std/assert@1"
+  }
+}

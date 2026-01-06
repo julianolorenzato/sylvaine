@@ -1,9 +1,11 @@
+use std::collections::HashMap;
+
 use crate::syntax_analysis::lower::Expr;
 use rand::Rng;
 use wasm_encoder::{
-    CodeSection, ConstExpr, FuncType, Function, FunctionSection, GlobalSection, GlobalType, Ieee64,
-    Instruction, Module, NameMap, NameSection, RefType, TableSection, TableType, TypeSection,
-    ValType,
+    AbstractHeapType, CodeSection, ConstExpr, EntityType, FuncType, Function, FunctionSection,
+    GlobalSection, GlobalType, HeapType, Ieee64, ImportSection, Instruction, Module, NameMap,
+    NameSection, RefType, TableSection, TableType, TypeSection, ValType,
 };
 
 #[derive(Debug, Clone)]
@@ -19,31 +21,38 @@ fn random_hash(len: usize) -> String {
         .collect()
 }
 
-pub fn codegen(ast: &Expr) {
+pub fn codegen(ast: &Expr) -> Vec<u8> {
     let mut wasm_code = WasmCode::new();
+    let mut env = Environment::new();
 
-    compile(ast, &mut wasm_code);
+    compile(ast, &mut wasm_code, &mut env);
 
     let bin_wasm = wasm_code.finish();
 
-    let wat = wasmprinter::print_bytes(bin_wasm).unwrap();
+    let wat = wasmprinter::print_bytes(&bin_wasm).unwrap();
+
+    println!("{wat}");
+
+    bin_wasm
 }
 
-fn compile(node: &Expr, wasm: &mut WasmCode) {
+fn compile(node: &Expr, wasm: &mut WasmCode, env: &mut Environment) {
     match node {
-        Expr::Define(name, expr) => {
-            // let func_type = FuncType::new(params, results)
-            // types.ty().func_type();
+        Expr::Define(name, expr) => match *expr.clone() {
+            Expr::Lambda(params, body) => {
+                env.push_scope();
 
-            // compile_top_level(expr, types, funcs, func, code);
-            // match expr {
-            //     Expr::Lambda(params, body) => todo!(),
-            //     Expr::Float(n) => todo!(),
-            //     Expr::
-            // }
+                for param in params {
+                    env.define_local(param, true);
+                }
+                compile(&body, wasm, env);
 
-            compile(expr, wasm);
-        }
+                env.pop_scope();
+
+                env.define_local(name.to_string(), true);
+            }
+            _ => todo!(),
+        },
         Expr::Float(n) => {
             wasm.float_value(*n);
         }
@@ -51,10 +60,25 @@ fn compile(node: &Expr, wasm: &mut WasmCode) {
             wasm.integer_value(*n);
         }
         Expr::Symbol(name) => {
-            todo!()
+            let scope_index = env.resolve(&name).expect("symbol not found");
+
+            // Check if its a free variable
+            // Free var: (struct.get ...)
+            // Bound var: (local.get $name)
+
+            match (&env.current_closure_context, scope_index) {
+                // Isn't a free variable
+                (None, 0) => {}
+                (None, x) => unreachable!(),
+                (Some(cc), 0) => {}
+                // Its a free variable, need to put inside an environment
+                (Some(cc), x) => {
+                    // Struct.get
+                }
+            }
         }
         Expr::Call(name, args) => {
-            todo!()
+            wasm.current_func.instructions().call_ref(0);
         }
         Expr::Let(bindings, body) => {
             todo!()
@@ -63,7 +87,7 @@ fn compile(node: &Expr, wasm: &mut WasmCode) {
             wasm.open_function(0);
 
             for expression in expressions {
-                compile(expression, wasm);
+                compile(expression, wasm, env);
             }
 
             wasm.close_function();
@@ -80,19 +104,30 @@ fn compile(node: &Expr, wasm: &mut WasmCode) {
 
             // let type_idx = types.len() - 1;
 
-            compile(body, wasm);
+            compile(body, wasm, env);
         }
+        Expr::List(items) => todo!(),
     }
 }
 
-fn compile_lambda(
-    name: String,
-    params: Vec<String>,
-    body: Expr,
-    types: &mut TypeSection,
-    funcs: &mut FunctionSection,
-    code: &mut CodeSection,
-) {
+fn compile_lambda(params: Vec<String>, body: Expr, wasm: &mut WasmCode, env: &mut Environment) {
+    env.push_scope();
+
+    for param in params {
+        // All params goes to function
+        env.define_local(param, true);
+    }
+
+    let closure_env_type = ValType::Ref(RefType {
+        nullable: false,
+        heap_type: HeapType::ANY,
+    });
+
+    FuncType::new([closure_env_type], []);
+
+    compile(&body, wasm, env);
+
+    env.pop_scope();
 }
 
 // fn compile_expr(
@@ -179,6 +214,7 @@ struct WasmCodeSections {
     globals: GlobalSection,
     code: CodeSection,
     names: NameSection,
+    imports: ImportSection,
 }
 
 impl WasmCode {
@@ -190,17 +226,22 @@ impl WasmCode {
         let mut globals = GlobalSection::new();
         let mut code = CodeSection::new();
         let mut names = NameSection::new();
+        let mut imports = ImportSection::new();
+
+        for operator in ["+", "-", "*", "/"] {
+            imports.import("stdlib", operator, EntityType::Function(0));
+        }
 
         names.module("sylvaine_generated");
 
-        globals.global(
-            GlobalType {
-                val_type: ValType::I32,
-                mutable: false,
-                shared: false,
-            },
-            &ConstExpr::i32_const(34),
-        );
+        // globals.global(
+        //     GlobalType {
+        //         val_type: ValType::I32,
+        //         mutable: false,
+        //         shared: false,
+        //     },
+        //     &ConstExpr::i32_const(34),
+        // );
 
         // Create closure table
         tables.table(TableType {
@@ -212,28 +253,26 @@ impl WasmCode {
         });
 
         // Naming functions
-        // let mut function_names = NameMap::new();
-        // function_names.append(0, "main");
-        // names.functions(&function_names);
+        let mut function_names = NameMap::new();
+        function_names.append(0, "+");
+        function_names.append(1, "-");
+        function_names.append(2, "*");
+        function_names.append(3, "/");
+        names.functions(&function_names);
 
         // Define function types
-        // types.ty().func_type(&FuncType::new([], [ValType::I32]));
+        types
+            .ty()
+            .func_type(&FuncType::new([ValType::I32, ValType::I32], [ValType::I32]));
 
         // Define functions
-        // functions.function(0).function(0);
+        // functions.function(0);
 
         // Define functions body
         // let mut main_function = Function::new([]);
         // main_function.instruction(&Instruction::End);
 
-        // let mut add_function = Function::new([]);
-        // add_function
-        //     .instruction(&Instruction::LocalGet(0))
-        //     .instruction(&Instruction::LocalGet(1))
-        //     .instruction(&Instruction::I32Add)
-        //     .instruction(&Instruction::End);
-
-        // code.function(&main_function).function(&add_function);
+        // code.function(&main_function);
 
         Self {
             module,
@@ -246,6 +285,7 @@ impl WasmCode {
                 globals,
                 code,
                 names,
+                imports,
             },
         }
     }
@@ -253,6 +293,7 @@ impl WasmCode {
     fn finish(mut self) -> Vec<u8> {
         self.module
             .section(&self.sections.types)
+            .section(&self.sections.imports)
             .section(&self.sections.functions)
             .section(&self.sections.tables)
             .section(&self.sections.globals)
@@ -268,8 +309,6 @@ impl WasmCode {
     }
 
     fn close_function(&mut self) {
-        println!("{}", &self.current_func.byte_len());
-
         let mut func_params = vec![];
         for _ in 0..self.current_func_n_params {
             func_params.push(ValType::I32);
@@ -300,59 +339,63 @@ impl WasmCode {
     }
 }
 
-// struct Environment {
-//     scopes: Vec<HashMap<String, Symbol>>,
-//     lambdas_count: u32,
-// }
+struct Environment {
+    scopes: Vec<HashMap<String, bool>>,
+    lambdas_count: u32,
+    current_closure_context: Option<Vec<String>>,
+}
 
-// impl Environment {
-//     fn new() -> Self {
-//         Self {
-//             // intialize with the top level scope
-//             scopes: vec![HashMap::new()],
-//             lambdas_count: 0,
-//         }
-//     }
+#[derive(Clone)]
+enum Type {
+    Integer(i32),
+    Float(f64),
+    Function(Vec<Type>, Box<Type>),
+    List(Vec<Type>),
+}
 
-//     fn scope_level(&self) -> u32 {
-//         (self.scopes.len() - 1) as u32
-//     }
+impl Environment {
+    fn new() -> Self {
+        Self {
+            // intialize with the top level scope
+            scopes: vec![HashMap::new()],
+            lambdas_count: 0,
+            current_closure_context: None,
+        }
+    }
 
-//     fn push_scope(&mut self) {
-//         self.scopes.push(HashMap::new());
-//         self.lambdas_count += 1;
-//     }
+    fn scope_level(&self) -> u32 {
+        (self.scopes.len() - 1) as u32
+    }
 
-//     fn pop_scope(&mut self) {
-//         if self.scope_level() != 0 {
-//             self.scopes.pop();
-//         }
-//     }
+    fn push_scope(&mut self) {
+        self.scopes.push(HashMap::new());
+        self.lambdas_count += 1;
+    }
 
-//     fn define_local(&mut self, name: String, kind: Kind) -> u32 {
-//         let idx = (self.scopes.len() + 1) as u32;
+    fn pop_scope(&mut self) {
+        if self.scope_level() != 0 {
+            self.scopes.pop();
+        }
+    }
 
-//         if let Some(scope) = self.scopes.last_mut() {
-//             scope.insert(
-//                 name,
-//                 Symbol {
-//                     // level: idx,
-//                     kind,
-//                 },
-//             );
-//         } else {
-//             panic!("define local")
-//         }
+    fn define_local(&mut self, name: String, ty: bool) -> u32 {
+        let idx = (self.scopes.len() + 1) as u32;
 
-//         idx
-//     }
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.insert(name, ty);
+        } else {
+            panic!("define local")
+        }
 
-//     fn resolve(&self, name: &str) -> Option<Symbol> {
-//         for scope in self.scopes.iter().rev() {
-//             if let Some(info) = scope.get(name) {
-//                 return Some(info.clone());
-//             }
-//         }
-//         None
-//     }
-// }
+        idx
+    }
+
+    fn resolve(&self, name: &str) -> Option<usize> {
+        for (i, scope) in self.scopes.iter().rev().enumerate() {
+            if let Some(info) = scope.get(name) {
+                return Some(i);
+            }
+        }
+        None
+    }
+}

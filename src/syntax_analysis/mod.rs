@@ -13,7 +13,6 @@ struct LispParser;
 pub enum SExpr {
     Integer(i32),
     Float(f64),
-    Nil,
     Symbol(String),
     List(Vec<SExpr>),
     Prog(Vec<SExpr>),
@@ -46,7 +45,7 @@ fn build_s_expression_ast(pair: Pair<Rule>) -> SExpr {
             SExpr::Prog(exprs)
         }
         Rule::symbol => SExpr::Symbol(pair.as_str().to_string()),
-        Rule::nil => SExpr::Nil,
+        Rule::nil => todo!(),
         Rule::integer => SExpr::Integer(pair.as_str().parse().unwrap()),
         Rule::float => SExpr::Float(pair.as_str().parse().unwrap()),
         Rule::list => {

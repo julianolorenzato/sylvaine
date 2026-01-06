@@ -5,11 +5,13 @@ pub enum Expr {
     Prog(Vec<Expr>),
     Integer(i32),
     Float(f64),
-    Call(String, Vec<Expr>),
+    Call(Box<Expr>, Vec<Expr>),
+    // Quote(Vec<SExpr>),
     Define(String, Box<Expr>),
     Lambda(Vec<String>, Box<Expr>),
     Let(Vec<(String, Expr)>, Box<Expr>),
     Symbol(String),
+    List(Vec<Expr>)
 }
 
 pub fn lower(ast: SExpr) -> Expr {
@@ -25,12 +27,12 @@ pub fn lower(ast: SExpr) -> Expr {
         SExpr::Symbol(s) => Expr::Symbol(s),
         SExpr::Integer(n) => Expr::Integer(n),
         SExpr::Float(n) => Expr::Float(n),
-        SExpr::Nil => todo!(),
         SExpr::List(xs) => {
             let mut it = xs.into_iter();
 
             // Match first list item
             match it.next() {
+                // Define Special Form
                 Some(SExpr::Symbol(s)) if s == "define" => {
                     let name = match it.next() {
                         Some(SExpr::Symbol(n)) => n,
@@ -42,6 +44,7 @@ pub fn lower(ast: SExpr) -> Expr {
 
                     Expr::Define(name, Box::new(lower(expr)))
                 }
+                // Lambda Special Form
                 Some(SExpr::Symbol(s)) if s == "lambda" => {
                     let params = match it.next() {
                         Some(SExpr::List(params)) => params,
@@ -62,6 +65,7 @@ pub fn lower(ast: SExpr) -> Expr {
 
                     Expr::Lambda(lambda_params, Box::new(lower(body)))
                 }
+                // Let Special Form
                 Some(SExpr::Symbol(s)) if s == "let" => {
                     let bindings = match it.next() {
                         Some(SExpr::List(bindings)) => bindings,
@@ -89,7 +93,12 @@ pub fn lower(ast: SExpr) -> Expr {
 
                     Expr::Let(let_bindings, Box::new(lower(body)))
                 }
-                Some(SExpr::Symbol(name)) => {
+                // Quote Special Form (when start to implement metaprogramming with macros)
+                // Some(SExpr::Symbol(s)) if s == "quote" => {
+                    
+                // },
+                // Simple call expression
+                Some(expr) => {
                     let args: Vec<SExpr> = it.collect();
 
                     let mut call_args = vec![];
@@ -98,9 +107,8 @@ pub fn lower(ast: SExpr) -> Expr {
                         call_args.push(lower(arg));
                     }
 
-                    Expr::Call(name, call_args)
+                    Expr::Call(Box::new(lower(expr)), call_args)
                 }
-                Some(_) => panic!("invalid construction"),
                 None => panic!("empty list"),
             }
         }

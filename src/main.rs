@@ -5,9 +5,6 @@ mod syntax_analysis;
 fn main() {
     let code = "
         (define pi (lambda () 3))
-
-        (define ss (a b) (add a b))
-        6
     ";
 
     let code2 = "
@@ -19,6 +16,5 @@ fn main() {
     ";
 
     let ast = syntax_analysis::parse(code.into());
-
-    println!("{:#?}", ast);
+    let wasm_code = codegen::codegen(&ast);
 }
