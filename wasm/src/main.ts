@@ -1,12 +1,12 @@
-import { p } from "@build/runtime.wasm";
-const wasmFile = await Deno.open("build/runtime.wasm");
+import { main } from "@build/code.wasm";
+// const wasmFile = await Deno.open("build/runtime.wasm");
 
-const buffer = new Uint8Array(50000);
+// const buffer = new Uint8Array(50000);
 
-wasmFile.read(buffer);
+// wasmFile.read(buffer);
 
-const { instance } = await WebAssembly.instantiate(buffer, {
+// const { instance } = await WebAssembly.instantiate(buffer, {
   
-});
+// });
 
-console.log({ instance });
+const a = main()

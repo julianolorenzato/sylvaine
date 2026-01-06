@@ -1,12 +1,13 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::Sub};
 
 use crate::syntax_analysis::lower::Expr;
 use rand::Rng;
 use wasm_encoder::{
     AbstractHeapType, CodeSection, CompositeInnerType, CompositeType, ConstExpr, EntityType,
-    FieldType, FuncType, Function, FunctionSection, GlobalSection, GlobalType, HeapType, Ieee64,
-    ImportSection, Instruction, Module, NameMap, NameSection, RefType, StorageType, StructType,
-    SubType, TableSection, TableType, TypeSection, ValType,
+    ExportKind, ExportSection, FieldType, FuncType, Function, FunctionSection, GlobalSection,
+    GlobalType, HeapType, Ieee64, ImportSection, IndirectNameMap, Instruction, Module, NameMap,
+    NameSection, RefType, StartSection, StorageType, StructType, SubType, TableSection, TableType,
+    TypeSection, ValType,
 };
 
 #[derive(Debug, Clone)]
@@ -79,19 +80,25 @@ fn compile(node: &Expr, wasm: &mut WasmCode, env: &mut Environment) {
             }
         }
         Expr::Call(name, args) => {
-            wasm.current_func.instructions().call_ref(0);
+            wasm.current_func
+                .instructions()
+                .local_get(0)
+                .struct_get(LISP_OBJ_TYPE_IDX, 0)
+                .local_get(1)
+                .struct_get(CLOSURE_TYPE_IDX, CLOSURE_FIELD_ENV_TYPE_IDX)
+                .call_ref(LISP_FUNC_SIG_TYPE_IDX);
         }
         Expr::Let(bindings, body) => {
             todo!()
         }
         Expr::Prog(expressions) => {
-            wasm.open_function(0);
+            // wasm.open_function(0);
 
             for expression in expressions {
                 compile(expression, wasm, env);
             }
 
-            wasm.close_function();
+            // wasm.close_function();
         }
         Expr::Lambda(params, body) => {
             // let mut func_params = vec![];
@@ -216,10 +223,49 @@ struct WasmCodeSections {
     code: CodeSection,
     names: NameSection,
     imports: ImportSection,
+    start: StartSection,
+    exports: ExportSection,
 }
 
-const LISP_OBJ_IDX: u32 = 0;
-const LISP_OBJ: HeapType = HeapType::Concrete(LISP_OBJ_IDX);
+// Lisp obj
+const LISP_OBJ_TYPE_IDX: u32 = 0;
+const LISP_OBJ_HEAP_TYPE: HeapType = HeapType::Concrete(LISP_OBJ_TYPE_IDX);
+const LISP_OBJ_REF_TYPE: RefType = RefType {
+    nullable: true,
+    heap_type: LISP_OBJ_HEAP_TYPE,
+};
+const LISP_OBJ_VAL_TYPE: ValType = ValType::Ref(LISP_OBJ_REF_TYPE);
+
+// Closure
+const CLOSURE_TYPE_IDX: u32 = 1;
+const CLOSURE_HEAP_TYPE: HeapType = HeapType::Concrete(CLOSURE_TYPE_IDX);
+
+const CLOSURE_FIELD_FUNC_TYPE_IDX: u32 = 0;
+const CLOSURE_FIELD_FUNC_HEAP_TYPE: HeapType = HeapType::Abstract {
+    shared: false,
+    ty: AbstractHeapType::Func,
+};
+const CLOSURE_FIELD_FUNC_REF_TYPE: RefType = RefType {
+    nullable: false,
+    heap_type: CLOSURE_FIELD_FUNC_HEAP_TYPE,
+};
+
+const CLOSURE_FIELD_ENV_TYPE_IDX: u32 = 1;
+
+const CONS_CELL_TYPE_IDX: u32 = 2;
+const CONS_CELL_HEAP_TYPE: HeapType = HeapType::Concrete(CONS_CELL_TYPE_IDX);
+
+const CONS_CELL_FIELD_CAR_IDX: u32 = 0;
+const CONS_CELL_FIELD_CDR_IDX: u32 = 1;
+
+const INTEGER_TYPE_IDX: u32 = 3;
+const INTEGER_HEAP_TYPE: HeapType = HeapType::Concrete(INTEGER_TYPE_IDX);
+
+const FLOAT_TYPE_IDX: u32 = 4;
+
+const LISP_FUNC_SIG_TYPE_IDX: u32 = 5;
+const LISP_FUNC_SIG_LOCAL_ENV: u32 = 0;
+const LISP_FUNC_SIG_LOCAL_ARGS: u32 = 1;
 
 impl WasmCode {
     fn new() -> Self {
@@ -253,19 +299,19 @@ impl WasmCode {
         // });
 
         // Mathematical functions imports
-        for operator in ["+", "-", "*", "/"] {
-            imports.import("stdlib", operator, EntityType::Function(0));
-        }
+        // for operator in ["+", "-", "*", "/"] {
+        //     imports.import("stdlib", operator, EntityType::Function(0));
+        // }
 
         // Naming functions
-        let mut function_names = NameMap::new();
-        function_names.append(0, "+");
-        function_names.append(1, "-");
-        function_names.append(2, "*");
-        function_names.append(3, "/");
-        names.functions(&function_names);
+        // let mut function_names = NameMap::new();
+        // function_names.append(0, "+");
+        // function_names.append(1, "-");
+        // function_names.append(2, "*");
+        // function_names.append(3, "/");
+        // names.functions(&function_names);
 
-        // Lisp object type
+        // Defining Lisp Obj type
         types.ty().subtype(&SubType {
             is_final: false,
             supertype_idx: None,
@@ -279,28 +325,21 @@ impl WasmCode {
             },
         });
 
-        // Closure type
+        // Defining Closure type
         types.ty().subtype(&SubType {
             is_final: true,
-            supertype_idx: Some(LISP_OBJ_IDX),
+            supertype_idx: Some(LISP_OBJ_TYPE_IDX),
             composite_type: CompositeType {
                 inner: CompositeInnerType::Struct(StructType {
                     fields: vec![
                         FieldType {
-                            element_type: StorageType::Val(ValType::Ref(RefType {
-                                nullable: false,
-                                heap_type: HeapType::Abstract {
-                                    shared: false,
-                                    ty: AbstractHeapType::Func,
-                                },
-                            })),
+                            element_type: StorageType::Val(ValType::Ref(
+                                CLOSURE_FIELD_FUNC_REF_TYPE,
+                            )),
                             mutable: false,
                         },
                         FieldType {
-                            element_type: StorageType::Val(ValType::Ref(RefType {
-                                nullable: false,
-                                heap_type: LISP_OBJ,
-                            })),
+                            element_type: StorageType::Val(LISP_OBJ_VAL_TYPE),
                             mutable: false,
                         },
                     ]
@@ -312,27 +351,169 @@ impl WasmCode {
             },
         });
 
-        // Mathematical function type
-        types
-            .ty()
-            .func_type(&FuncType::new([ValType::I32, ValType::I32], [ValType::I32]));
+        // Naming Closure fields
+        let mut field_names = IndirectNameMap::new();
+        let mut closure_field_names = NameMap::new();
+        closure_field_names.append(0, "func");
+        closure_field_names.append(1, "env");
+
+        field_names.append(CLOSURE_TYPE_IDX, &closure_field_names);
+        names.fields(&field_names);
+
+        // Defining Cons Cell
+        types.ty().subtype(&SubType {
+            is_final: true,
+            supertype_idx: Some(LISP_OBJ_TYPE_IDX),
+            composite_type: CompositeType {
+                inner: CompositeInnerType::Struct(StructType {
+                    fields: vec![
+                        FieldType {
+                            element_type: StorageType::Val(LISP_OBJ_VAL_TYPE),
+                            mutable: false,
+                        },
+                        FieldType {
+                            element_type: StorageType::Val(LISP_OBJ_VAL_TYPE),
+                            mutable: false,
+                        },
+                    ]
+                    .into(),
+                }),
+                shared: false,
+                descriptor: None,
+                describes: None,
+            },
+        });
+
+        // Naming Cons Cell fields
+        let mut field_names = IndirectNameMap::new();
+        let mut cons_cell_field_names = NameMap::new();
+        cons_cell_field_names.append(CONS_CELL_FIELD_CAR_IDX, "car");
+        cons_cell_field_names.append(CONS_CELL_FIELD_CDR_IDX, "cdr");
+        field_names.append(CONS_CELL_TYPE_IDX, &cons_cell_field_names);
+        names.fields(&field_names);
+
+        // Defining Integer
+        types.ty().subtype(&SubType {
+            is_final: true,
+            supertype_idx: Some(LISP_OBJ_TYPE_IDX),
+            composite_type: CompositeType {
+                inner: CompositeInnerType::Struct(StructType {
+                    fields: vec![FieldType {
+                        element_type: StorageType::Val(ValType::I32),
+                        mutable: false,
+                    }]
+                    .into(),
+                }),
+                shared: false,
+                descriptor: None,
+                describes: None,
+            },
+        });
+
+        // Defining Float
+        types.ty().subtype(&SubType {
+            is_final: true,
+            supertype_idx: Some(LISP_OBJ_TYPE_IDX),
+            composite_type: CompositeType {
+                inner: CompositeInnerType::Struct(StructType {
+                    fields: vec![FieldType {
+                        element_type: StorageType::Val(ValType::F64),
+                        mutable: false,
+                    }]
+                    .into(),
+                }),
+                shared: false,
+                descriptor: None,
+                describes: None,
+            },
+        });
+
+        // Defining Lisp Func Sig
+        types.ty().func_type(&FuncType::new(
+            [LISP_OBJ_VAL_TYPE, LISP_OBJ_VAL_TYPE],
+            [LISP_OBJ_VAL_TYPE],
+        ));
+
+        // Defining Main Sig
+        types.ty().func_type(&FuncType::new([], [ValType::I32]));
 
         // Naming types
         let mut type_names = NameMap::new();
-        type_names.append(0, "lisp_obj");
-        type_names.append(1, "closure");
-        type_names.append(2, "i32-i32-i32");
-        type_names.append(3, "main");
+        type_names.append(LISP_OBJ_TYPE_IDX, "lisp_obj");
+        type_names.append(CLOSURE_TYPE_IDX, "closure");
+        type_names.append(CONS_CELL_TYPE_IDX, "cons_cell");
+        type_names.append(INTEGER_TYPE_IDX, "integer");
+        type_names.append(FLOAT_TYPE_IDX, "float");
+        type_names.append(LISP_FUNC_SIG_TYPE_IDX, "lisp_func_sig");
+        type_names.append(6, "main");
         names.types(&type_names);
 
         // Define functions
-        // functions.function(0);
+        functions.function(LISP_FUNC_SIG_TYPE_IDX);
+        let mut builtin_function_plus = Function::new([]);
+        builtin_function_plus
+            .instructions()
 
-        // Define functions body
-        // let mut main_function = Function::new([]);
-        // main_function.instruction(&Instruction::End);
+            // Pega o car
+            .local_get(LISP_FUNC_SIG_LOCAL_ARGS)
+            .ref_cast_non_null(CONS_CELL_HEAP_TYPE)
+            .struct_get(CONS_CELL_TYPE_IDX, CONS_CELL_FIELD_CAR_IDX)
 
-        // code.function(&main_function);
+            // pega o inteiro dentro do car
+            .ref_cast_non_null(INTEGER_HEAP_TYPE)
+            .struct_get(INTEGER_TYPE_IDX, 0)
+
+            // pega o cdr
+            .local_get(LISP_FUNC_SIG_LOCAL_ARGS)
+            .ref_cast_non_null(CONS_CELL_HEAP_TYPE)
+            .struct_get(CONS_CELL_TYPE_IDX, CONS_CELL_FIELD_CDR_IDX)
+
+            // pega o car do cdr
+            .ref_cast_non_null(CONS_CELL_HEAP_TYPE)
+            .struct_get(CONS_CELL_TYPE_IDX, CONS_CELL_FIELD_CAR_IDX)
+
+            // o outro inteiro do outro car
+            .ref_cast_non_null(INTEGER_HEAP_TYPE)
+            .struct_get(INTEGER_TYPE_IDX, 0)
+
+            // Soma os dois inteiros da pilha
+            .i32_add()
+
+            // Empacota o inteiro resultante da operação em uma nova box
+            .struct_new(INTEGER_TYPE_IDX)
+
+            // Finaliza o código da função
+            .end();
+        code.function(&builtin_function_plus);
+
+        functions.function(6);
+        let mut main_function = Function::new([]);
+        main_function
+            .instructions()
+            
+            .ref_null(LISP_OBJ_HEAP_TYPE)
+
+            .i32_const(30)
+            .struct_new(INTEGER_TYPE_IDX)
+
+            .i32_const(24)
+            .struct_new(INTEGER_TYPE_IDX)
+            .ref_null(LISP_OBJ_HEAP_TYPE)
+            .struct_new(CONS_CELL_TYPE_IDX)
+
+            .struct_new(CONS_CELL_TYPE_IDX)
+            
+            .call(0)
+
+            .ref_cast_non_null(INTEGER_HEAP_TYPE)
+            .struct_get(INTEGER_TYPE_IDX, 0)
+            .end();
+        code.function(&main_function);
+
+        let start = StartSection { function_index: 1 };
+
+        let mut exports = ExportSection::new();
+        exports.export("main", ExportKind::Func, 1);
 
         Self {
             module,
@@ -346,6 +527,8 @@ impl WasmCode {
                 code,
                 names,
                 imports,
+                start,
+                exports,
             },
         }
     }
@@ -357,6 +540,8 @@ impl WasmCode {
             .section(&self.sections.functions)
             .section(&self.sections.tables)
             .section(&self.sections.globals)
+            .section(&self.sections.exports)
+            // .section(&self.sections.start)
             .section(&self.sections.code)
             .section(&self.sections.names);
 

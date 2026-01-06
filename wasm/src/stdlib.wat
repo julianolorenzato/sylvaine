@@ -1,5 +1,5 @@
 (module
-    (func $+ (export "stdlib" ""))
+    ;; (func $+ (export "stdlib" "+") (param $lisp_obj))
 
     (type $Lisp_obj
         (struct
