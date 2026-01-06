@@ -3,9 +3,10 @@ use std::collections::HashMap;
 use crate::syntax_analysis::lower::Expr;
 use rand::Rng;
 use wasm_encoder::{
-    AbstractHeapType, CodeSection, ConstExpr, EntityType, FuncType, Function, FunctionSection,
-    GlobalSection, GlobalType, HeapType, Ieee64, ImportSection, Instruction, Module, NameMap,
-    NameSection, RefType, TableSection, TableType, TypeSection, ValType,
+    AbstractHeapType, CodeSection, CompositeInnerType, CompositeType, ConstExpr, EntityType,
+    FieldType, FuncType, Function, FunctionSection, GlobalSection, GlobalType, HeapType, Ieee64,
+    ImportSection, Instruction, Module, NameMap, NameSection, RefType, StorageType, StructType,
+    SubType, TableSection, TableType, TypeSection, ValType,
 };
 
 #[derive(Debug, Clone)]
@@ -217,6 +218,9 @@ struct WasmCodeSections {
     imports: ImportSection,
 }
 
+const LISP_OBJ_IDX: u32 = 0;
+const LISP_OBJ: HeapType = HeapType::Concrete(LISP_OBJ_IDX);
+
 impl WasmCode {
     fn new() -> Self {
         let module = Module::new();
@@ -227,10 +231,6 @@ impl WasmCode {
         let mut code = CodeSection::new();
         let mut names = NameSection::new();
         let mut imports = ImportSection::new();
-
-        for operator in ["+", "-", "*", "/"] {
-            imports.import("stdlib", operator, EntityType::Function(0));
-        }
 
         names.module("sylvaine_generated");
 
@@ -244,13 +244,18 @@ impl WasmCode {
         // );
 
         // Create closure table
-        tables.table(TableType {
-            element_type: RefType::FUNCREF,
-            table64: true,
-            minimum: 1,
-            maximum: None,
-            shared: false,
-        });
+        // tables.table(TableType {
+        //     element_type: RefType::FUNCREF,
+        //     table64: true,
+        //     minimum: 1,
+        //     maximum: None,
+        //     shared: false,
+        // });
+
+        // Mathematical functions imports
+        for operator in ["+", "-", "*", "/"] {
+            imports.import("stdlib", operator, EntityType::Function(0));
+        }
 
         // Naming functions
         let mut function_names = NameMap::new();
@@ -260,10 +265,65 @@ impl WasmCode {
         function_names.append(3, "/");
         names.functions(&function_names);
 
-        // Define function types
+        // Lisp object type
+        types.ty().subtype(&SubType {
+            is_final: false,
+            supertype_idx: None,
+            composite_type: CompositeType {
+                inner: CompositeInnerType::Struct(StructType {
+                    fields: vec![].into(),
+                }),
+                shared: false,
+                descriptor: None,
+                describes: None,
+            },
+        });
+
+        // Closure type
+        types.ty().subtype(&SubType {
+            is_final: true,
+            supertype_idx: Some(LISP_OBJ_IDX),
+            composite_type: CompositeType {
+                inner: CompositeInnerType::Struct(StructType {
+                    fields: vec![
+                        FieldType {
+                            element_type: StorageType::Val(ValType::Ref(RefType {
+                                nullable: false,
+                                heap_type: HeapType::Abstract {
+                                    shared: false,
+                                    ty: AbstractHeapType::Func,
+                                },
+                            })),
+                            mutable: false,
+                        },
+                        FieldType {
+                            element_type: StorageType::Val(ValType::Ref(RefType {
+                                nullable: false,
+                                heap_type: LISP_OBJ,
+                            })),
+                            mutable: false,
+                        },
+                    ]
+                    .into(),
+                }),
+                shared: false,
+                descriptor: None,
+                describes: None,
+            },
+        });
+
+        // Mathematical function type
         types
             .ty()
             .func_type(&FuncType::new([ValType::I32, ValType::I32], [ValType::I32]));
+
+        // Naming types
+        let mut type_names = NameMap::new();
+        type_names.append(0, "lisp_obj");
+        type_names.append(1, "closure");
+        type_names.append(2, "i32-i32-i32");
+        type_names.append(3, "main");
+        names.types(&type_names);
 
         // Define functions
         // functions.function(0);
