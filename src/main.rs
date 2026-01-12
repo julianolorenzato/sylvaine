@@ -17,9 +17,10 @@ fn main() {
     (let ((x (left 3 6)) (y 3)) (right x y))
     ";
 
-    let code3 = "(define sum (+ 4 5))";
+    let code3 = "(define sum (lambda () 4 5))  (sum)";
 
     let ast = syntax_analysis::parse(code3.into());
+    println!("{:?}", ast);
     let wasm_code = codegen::codegen(&ast);
 
     File::create("./wasm/build/code.wasm")

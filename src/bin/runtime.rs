@@ -1,4 +1,4 @@
-use wasmtime::{Config, Engine, Error, Linker, Module, Store};
+use wasmtime::{AnyRef, Config, Engine, Error, Linker, Module, Rooted, Store};
 
 fn main() -> Result<(), Error> {
     let mut config = Config::new();
@@ -17,11 +17,11 @@ fn main() -> Result<(), Error> {
 
     let instance = linker.instantiate(&mut store, &module)?;
 
-    let main_func = instance.get_typed_func::<(), i32>(&mut store, "main")?;
+    let main_func = instance.get_typed_func::<(), Option<Rooted<AnyRef>>>(&mut store, "main")?;
 
     let result = main_func.call(&mut store, ())?;
 
-    println!("Result: {}", result);
+    println!("Result: {:?}", result);
 
     Ok(())
 }
