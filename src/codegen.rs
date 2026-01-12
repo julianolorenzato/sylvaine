@@ -67,10 +67,10 @@ fn compile(node: &Expr, wasm: &mut WasmCode, env: &mut Environment) {
             compile(expr, wasm, env);
 
             // Emit instructions to set the previous created null global
-            // with the result of instructions of inner expression
-            wasm.sections.functions.function(MAIN_FUNC_SIG_TYPE_IDX);
-            wasm.current_func.instructions().global_set(global_idx);
-            wasm.sections.code.function(&wasm.current_func);
+            wasm.current_func
+                .instructions()
+                .global_set(global_idx)
+                .global_get(global_idx);
         }
         Expr::Float(n) => {
             wasm.float_value(*n);
@@ -79,9 +79,9 @@ fn compile(node: &Expr, wasm: &mut WasmCode, env: &mut Environment) {
             wasm.integer_value(*n);
         }
         Expr::Symbol(name) => {
-            match env.resolve(&name).expect("symbol not found") {
+            match env.resolve(&name) {
                 // bound var
-                (position_index, 0) => {
+                Some((position_index, 0)) => {
                     wasm.current_func
                         .instructions()
                         .local_get(LISP_FUNC_SIG_LOCAL_ARGS);
@@ -99,17 +99,29 @@ fn compile(node: &Expr, wasm: &mut WasmCode, env: &mut Environment) {
                         .struct_get(CONS_CELL_TYPE_IDX, CONS_CELL_FIELD_CAR_IDX);
                 }
                 // global var
-                (global_index, i) if i == env.scope_level() => {
+                Some((global_index, i)) if i == env.scope_level() => {
                     wasm.current_func.instructions().global_get(global_index);
                 }
                 // free var
-                (env_index, i) => {
+                Some((env_index, i)) => {
                     wasm.current_func
                         .instructions()
                         .local_get(LISP_FUNC_SIG_LOCAL_ENV)
                         .ref_cast_non_null(CLOSURE_HEAP_TYPE)
                         .struct_get(CLOSURE_FIELD_ENV_TYPE_IDX, env_index);
                 }
+                // builtin
+                None => match name.as_str() {
+                    "+" => {
+                        wasm.current_func.instructions().call(ADD_FUNC_IDX);
+                    }
+                    "-" => {
+                        todo!()
+                    }
+                    _ => {
+                        panic!("symbol {} not found", name);
+                    }
+                },
             }
         }
         Expr::Lambda(params, body) => {
@@ -117,7 +129,7 @@ fn compile(node: &Expr, wasm: &mut WasmCode, env: &mut Environment) {
 
             let ctx: HashMap<String, u32> = HashMap::new();
 
-            wasm.current_func = Function::new([]);
+            let parent_func = std::mem::replace(&mut wasm.current_func, Function::new([]));
 
             env.push_scope();
 
@@ -129,9 +141,14 @@ fn compile(node: &Expr, wasm: &mut WasmCode, env: &mut Environment) {
 
             env.pop_scope();
 
-            wasm.sections.functions.function(LISP_FUNC_SIG_TYPE_IDX);
+            // Finish lambda code with an End
             wasm.current_func.instruction(&Instruction::End);
-            wasm.sections.code.function(&wasm.current_func);
+
+            // Return to parent function
+            let lambda_func = std::mem::replace(&mut wasm.current_func, parent_func);
+
+            wasm.sections.functions.function(LISP_FUNC_SIG_TYPE_IDX);
+            wasm.sections.code.function(&lambda_func);
 
             // after, just left a $Closure object on the stack of the current flow
             let mut ctx_fields = vec![];
@@ -179,13 +196,23 @@ fn compile(node: &Expr, wasm: &mut WasmCode, env: &mut Environment) {
             todo!()
         }
         Expr::Prog(expressions) => {
-            // wasm.open_function(0);
+            let len = expressions.len();
+            if len == 0 {
+                // Se o programa for vazio, retornamos Nil para não deixar a pilha vazia
+                wasm.current_func
+                    .instructions()
+                    .ref_null(LISP_OBJ_HEAP_TYPE)
+                    .struct_new(LISP_OBJ_TYPE_IDX);
+            } else {
+                for (i, expression) in expressions.iter().enumerate() {
+                    compile(expression, wasm, env);
 
-            for expression in expressions {
-                compile(expression, wasm, env);
+                    // Limpa a pilha para todas as expressões exceto a última
+                    if i < len - 1 {
+                        wasm.current_func.instructions().drop();
+                    }
+                }
             }
-
-            // wasm.close_function();
         }
         Expr::List(items) => todo!(),
     }
@@ -424,20 +451,19 @@ impl WasmCode {
         // Main func
         functions.function(MAIN_FUNC_SIG_TYPE_IDX);
         let mut main_function = Function::new([]);
-        main_function
-            .instructions()
-            //     .ref_null(LISP_OBJ_HEAP_TYPE)
-            //     .i32_const(30)
-            //     .struct_new(INTEGER_TYPE_IDX)
-            //     .i32_const(24)
-            //     .struct_new(INTEGER_TYPE_IDX)
-            //     .ref_null(LISP_OBJ_HEAP_TYPE)
-            //     .struct_new(CONS_CELL_TYPE_IDX)
-            //     .struct_new(CONS_CELL_TYPE_IDX)
-            //     .call(0)
-            //     .ref_cast_non_null(INTEGER_HEAP_TYPE)
-            //     .struct_get(INTEGER_TYPE_IDX, 0)
-            .end();
+        main_function.instructions();
+        //     .ref_null(LISP_OBJ_HEAP_TYPE)
+        //     .i32_const(30)
+        //     .struct_new(INTEGER_TYPE_IDX)
+        //     .i32_const(24)
+        //     .struct_new(INTEGER_TYPE_IDX)
+        //     .ref_null(LISP_OBJ_HEAP_TYPE)
+        //     .struct_new(CONS_CELL_TYPE_IDX)
+        //     .struct_new(CONS_CELL_TYPE_IDX)
+        //     .call(0)
+        //     .ref_cast_non_null(INTEGER_HEAP_TYPE)
+        //     .struct_get(INTEGER_TYPE_IDX, 0)
+        // .end();
         code.function(&main_function);
 
         // + func

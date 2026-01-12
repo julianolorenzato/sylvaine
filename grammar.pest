@@ -6,4 +6,5 @@ atom = _{ nil | float | integer | symbol }
 nil = { "Nil" }
 integer = @{ "-"? ~ ASCII_DIGIT+ }
 float = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
-symbol = @{ ASCII_ALPHA ~ ("-" | ASCII_ALPHANUMERIC)* }
+symbol = @{ operator | (ASCII_ALPHA ~ ("-" | ASCII_ALPHANUMERIC)*) }
+operator = { "+" | "-" | "*" | "/" }

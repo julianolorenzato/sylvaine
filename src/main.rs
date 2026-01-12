@@ -17,8 +17,7 @@ fn main() {
     (let ((x (left 3 6)) (y 3)) (right x y))
     ";
 
-    let code3 = "(+ 4 5)
-    ";
+    let code3 = "(define sum (+ 4 5))";
 
     let ast = syntax_analysis::parse(code3.into());
     let wasm_code = codegen::codegen(&ast);
