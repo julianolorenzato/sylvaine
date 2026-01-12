@@ -1,4 +1,7 @@
-use std::{collections::HashMap, ops::Sub};
+use std::{
+    collections::HashMap,
+    ops::{Bound, Sub},
+};
 
 use crate::syntax_analysis::lower::Expr;
 use rand::Rng;
@@ -15,6 +18,21 @@ enum Kind {
     Lambda,
     Integer,
 }
+
+// type LambdaDict = HashMap<*const Expr, String>;
+
+// fn collect_lambdas(node: &Expr, dict: &mut LambdaDict) {
+//     match node {
+//         Expr::Lambda(params, body) => {
+//             let func_id = format!("fn_{}", dict.len());
+
+//             dict.insert(node as *const Expr, func_id);
+
+//             collect_lambdas(body, dict);
+//         },
+//         Expr::Define(_, expr)
+//     }
+// }
 
 fn random_hash(len: usize) -> String {
     let mut rng = rand::rng();
@@ -40,21 +58,22 @@ pub fn codegen(ast: &Expr) -> Vec<u8> {
 
 fn compile(node: &Expr, wasm: &mut WasmCode, env: &mut Environment) {
     match node {
-        Expr::Define(name, expr) => match *expr.clone() {
-            Expr::Lambda(params, body) => {
-                env.push_scope();
+        Expr::Define(name, expr) => {
+            let global_idx = wasm.sections.globals.len();
+            wasm.sections.globals.global(
+                GlobalType {
+                    val_type: LISP_OBJ_VAL_TYPE,
+                    mutable: true,
+                    shared: false,
+                },
+                &ConstExpr::empty(),
+            );
+            compile(expr, wasm, env);
 
-                for param in params {
-                    env.define_local(param, true);
-                }
-                compile(&body, wasm, env);
-
-                env.pop_scope();
-
-                env.define_local(name.to_string(), true);
-            }
-            _ => todo!(),
-        },
+            wasm.sections.functions.function(MAIN_FUNC_SIG_TYPE_IDX);
+            wasm.current_func.instructions().global_set(global_idx);
+            wasm.sections.code.function(&wasm.current_func);
+        }
         Expr::Float(n) => {
             wasm.float_value(*n);
         }
@@ -62,30 +81,85 @@ fn compile(node: &Expr, wasm: &mut WasmCode, env: &mut Environment) {
             wasm.integer_value(*n);
         }
         Expr::Symbol(name) => {
-            let scope_index = env.resolve(&name).expect("symbol not found");
+            let (var, scope_index) = env.resolve(&name).expect("symbol not found");
 
-            // Check if its a free variable
-            // Free var: (struct.get ...)
-            // Bound var: (local.get $name)
-
-            match (&env.current_closure_context, scope_index) {
-                // Isn't a free variable
-                (None, 0) => {}
-                (None, x) => unreachable!(),
-                (Some(cc), 0) => {}
-                // Its a free variable, need to put inside an environment
-                (Some(cc), x) => {
-                    // Struct.get
+            if scope_index != 0 {
+                match var {
+                    Var::Bound(i) => {
+                        env.define_free(name.to_string(), i, scope_index);
+                    }
+                    Var::Free(_, _) => unreachable!(),
+                }
+            } else {
+                match var {
+                    Var::Bound(i) => {}
+                    Var::Free(a, b) => {
+                        wasm.current_func.instructions().local_get(a);
+                    }
                 }
             }
         }
-        Expr::Call(name, args) => {
+        Expr::Lambda(params, body) => {
+            let func_idx = wasm.sections.functions.len();
+
+            let ctx: HashMap<String, u32> = HashMap::new();
+
+            wasm.current_func = Function::new([]);
+
+            env.push_scope();
+
+            for (i, param) in params.iter().enumerate() {
+                env.define_bound(param.to_string(), i as u32);
+            }
+
+            compile(body, wasm, env);
+
+            env.pop_scope();
+
+            wasm.sections.functions.function(LISP_FUNC_SIG_TYPE_IDX);
+            wasm.current_func.instruction(&Instruction::End);
+            wasm.sections.code.function(&wasm.current_func);
+
+            // after, just left a $Closure object on the stack of the current flow
+            let mut ctx_fields = vec![];
+            for (name, idx) in ctx {
+                ctx_fields.push(FieldType {
+                    element_type: StorageType::Val(LISP_OBJ_VAL_TYPE),
+                    mutable: false,
+                });
+
+                wasm.current_func.instruction(&Instruction::LocalGet(idx));
+            }
+
+            wasm.sections.types.ty().struct_(ctx_fields);
+
+            let ctx_type_idx = wasm.sections.types.len() - 1;
+
             wasm.current_func
                 .instructions()
-                .local_get(0)
-                .struct_get(LISP_OBJ_TYPE_IDX, 0)
-                .local_get(1)
-                .struct_get(CLOSURE_TYPE_IDX, CLOSURE_FIELD_ENV_TYPE_IDX)
+                .struct_new(ctx_type_idx)
+                .ref_func(func_idx)
+                .struct_new(CLOSURE_TYPE_IDX);
+        }
+        Expr::Call(expr, args) => {
+            wasm.current_func
+                .instructions()
+                .ref_null(LISP_OBJ_HEAP_TYPE)
+                .struct_new(LISP_OBJ_TYPE_IDX);
+            compile(expr, wasm, env);
+
+            for arg in args.iter().rev() {
+                compile(arg, wasm, env);
+            }
+
+            compile(expr, wasm, env);
+
+            wasm.current_func
+                .instructions()
+                // .local_get(0)
+                // .struct_get(LISP_OBJ_TYPE_IDX, 0)
+                // .local_get(1)
+                // .struct_get(CLOSURE_TYPE_IDX, CLOSURE_FIELD_ENV_TYPE_IDX)
                 .call_ref(LISP_FUNC_SIG_TYPE_IDX);
         }
         Expr::Let(bindings, body) => {
@@ -100,119 +174,16 @@ fn compile(node: &Expr, wasm: &mut WasmCode, env: &mut Environment) {
 
             // wasm.close_function();
         }
-        Expr::Lambda(params, body) => {
-            // let mut func_params = vec![];
-            // for param in params {
-            //     func_params.push(ValType::I32);
-            // }
-
-            // let func_type = FuncType::new(func_params, [ValType::I32]);
-
-            // types.ty().func_type(&func_type);
-
-            // let type_idx = types.len() - 1;
-
-            compile(body, wasm, env);
-        }
         Expr::List(items) => todo!(),
     }
 }
-
-fn compile_lambda(params: Vec<String>, body: Expr, wasm: &mut WasmCode, env: &mut Environment) {
-    env.push_scope();
-
-    for param in params {
-        // All params goes to function
-        env.define_local(param, true);
-    }
-
-    let closure_env_type = ValType::Ref(RefType {
-        nullable: false,
-        heap_type: HeapType::ANY,
-    });
-
-    FuncType::new([closure_env_type], []);
-
-    compile(&body, wasm, env);
-
-    env.pop_scope();
-}
-
-// fn compile_expr(
-//     ast: &Expr,
-//     env: &mut Environment,
-//     types: &mut TypeSection,
-//     funcs: &mut FunctionSection,
-//     code: &mut CodeSection,
-//     current_func: Option<&mut Function>,
-// ) {
-//     match ast {
-//         Expr::List(xs) => match xs.as_slice() {
-//             // [Expr::Symbol(s), ..] if s == "define" && env.scope_level() != 0 => {
-//             //     panic!("'define' is a special expression that extends (mutates) the current scope, therefore it can only be used at the file top level")
-//             // }
-//             // // define
-//             // [Expr::Symbol(s), Expr::Symbol(name), expr]
-//             //     if s == "define" && env.scope_level() == 0 =>
-//             // {
-//             //     env.define_local(name.to_string(), ValType::I32);
-//             // }
-//             // let bindings
-//             [Expr::Symbol(s), Expr::List(bindings)] if s == "let" => {}
-//             // lambda creation
-//             [Expr::Symbol(s), Expr::List(params), body] if s == "lambda" => {
-//                 env.push_scope();
-
-//                 let typed_params = vec![ValType::I32; params.len()];
-//                 types
-//                     .ty()
-//                     .func_type(&FuncType::new(typed_params, [ValType::I32]));
-
-//                 funcs.function(env.lambdas_count);
-
-//                 let mut fun = Function::new([]);
-//                 code.function(&fun);
-
-//                 for param in params {
-//                     if let Expr::Symbol(s) = param {
-//                         env.define_local(s.to_string(), ValType::I32);
-//                     } else {
-//                         panic!("param should be a symbol")
-//                     }
-//                 }
-
-//                 compile_expr(body, env, types, funcs, code, Some(&mut fun));
-
-//                 env.pop_scope();
-//             }
-//             // lambda call
-//             [Expr::Symbol(s), args @ ..] => {
-//                 if let Some(symbol) = env.resolve(s) {
-//                     if let Some(func) = current_func {
-//                         func.instruction(Instruction::CallIndirect {
-//                             type_index: (),
-//                             table_index: (),
-//                         })
-//                     }
-//                 } else {
-//                     panic!("identifier {} not found", s);
-//                 }
-//             }
-//             _ => todo!(),
-//         },
-//         Expr::Integer(n) => {
-//             // if
-//             // current_fun.instruction(&Instruction::I32Const(*n));
-//         }
-//         _ => todo!(),
-//     }
-// }
 
 struct WasmCode {
     module: Module,
     current_func: Function,
     current_func_n_params: u32,
     sections: WasmCodeSections,
+    current_func_idx: u32,
 }
 
 struct WasmCodeSections {
@@ -227,6 +198,7 @@ struct WasmCodeSections {
     exports: ExportSection,
 }
 
+// TYPE INDEXES:
 // Lisp obj
 const LISP_OBJ_TYPE_IDX: u32 = 0;
 const LISP_OBJ_HEAP_TYPE: HeapType = HeapType::Concrete(LISP_OBJ_TYPE_IDX);
@@ -252,20 +224,32 @@ const CLOSURE_FIELD_FUNC_REF_TYPE: RefType = RefType {
 
 const CLOSURE_FIELD_ENV_TYPE_IDX: u32 = 1;
 
+// Cons cell
 const CONS_CELL_TYPE_IDX: u32 = 2;
 const CONS_CELL_HEAP_TYPE: HeapType = HeapType::Concrete(CONS_CELL_TYPE_IDX);
 
 const CONS_CELL_FIELD_CAR_IDX: u32 = 0;
 const CONS_CELL_FIELD_CDR_IDX: u32 = 1;
 
+// Integer
 const INTEGER_TYPE_IDX: u32 = 3;
 const INTEGER_HEAP_TYPE: HeapType = HeapType::Concrete(INTEGER_TYPE_IDX);
 
+// Float
 const FLOAT_TYPE_IDX: u32 = 4;
 
+// Function types
 const LISP_FUNC_SIG_TYPE_IDX: u32 = 5;
 const LISP_FUNC_SIG_LOCAL_ENV: u32 = 0;
 const LISP_FUNC_SIG_LOCAL_ARGS: u32 = 1;
+
+const INIT_FUNC_SIG_TYPE_IDX: u32 = 6;
+const MAIN_FUNC_SIG_TYPE_IDX: u32 = 7;
+
+// Function INDEXES:
+const INIT_FUNC_IDX: u32 = 0;
+const MAIN_FUNC_IDX: u32 = 1;
+const ADD_FUNC_IDX: u32 = 2;
 
 impl WasmCode {
     fn new() -> Self {
@@ -428,13 +412,16 @@ impl WasmCode {
             },
         });
 
-        // Defining Lisp Func Sig
+        // Defining Lisp Func Signature
         types.ty().func_type(&FuncType::new(
             [LISP_OBJ_VAL_TYPE, LISP_OBJ_VAL_TYPE],
             [LISP_OBJ_VAL_TYPE],
         ));
 
-        // Defining Main Sig
+        // Defining Init Func Signature
+        types.ty().func_type(&FuncType::new([], []));
+
+        // Defining Main Func Signature
         types.ty().func_type(&FuncType::new([], [ValType::I32]));
 
         // Naming types
@@ -453,35 +440,27 @@ impl WasmCode {
         let mut builtin_function_plus = Function::new([]);
         builtin_function_plus
             .instructions()
-
             // Pega o car
             .local_get(LISP_FUNC_SIG_LOCAL_ARGS)
             .ref_cast_non_null(CONS_CELL_HEAP_TYPE)
             .struct_get(CONS_CELL_TYPE_IDX, CONS_CELL_FIELD_CAR_IDX)
-
             // pega o inteiro dentro do car
             .ref_cast_non_null(INTEGER_HEAP_TYPE)
             .struct_get(INTEGER_TYPE_IDX, 0)
-
             // pega o cdr
             .local_get(LISP_FUNC_SIG_LOCAL_ARGS)
             .ref_cast_non_null(CONS_CELL_HEAP_TYPE)
             .struct_get(CONS_CELL_TYPE_IDX, CONS_CELL_FIELD_CDR_IDX)
-
             // pega o car do cdr
             .ref_cast_non_null(CONS_CELL_HEAP_TYPE)
             .struct_get(CONS_CELL_TYPE_IDX, CONS_CELL_FIELD_CAR_IDX)
-
             // o outro inteiro do outro car
             .ref_cast_non_null(INTEGER_HEAP_TYPE)
             .struct_get(INTEGER_TYPE_IDX, 0)
-
             // Soma os dois inteiros da pilha
             .i32_add()
-
             // Empacota o inteiro resultante da operação em uma nova box
             .struct_new(INTEGER_TYPE_IDX)
-
             // Finaliza o código da função
             .end();
         code.function(&builtin_function_plus);
@@ -490,21 +469,15 @@ impl WasmCode {
         let mut main_function = Function::new([]);
         main_function
             .instructions()
-            
             .ref_null(LISP_OBJ_HEAP_TYPE)
-
             .i32_const(30)
             .struct_new(INTEGER_TYPE_IDX)
-
             .i32_const(24)
             .struct_new(INTEGER_TYPE_IDX)
             .ref_null(LISP_OBJ_HEAP_TYPE)
             .struct_new(CONS_CELL_TYPE_IDX)
-
             .struct_new(CONS_CELL_TYPE_IDX)
-            
             .call(0)
-
             .ref_cast_non_null(INTEGER_HEAP_TYPE)
             .struct_get(INTEGER_TYPE_IDX, 0)
             .end();
@@ -519,6 +492,7 @@ impl WasmCode {
             module,
             current_func: Function::new([]),
             current_func_n_params: 0,
+            current_func_idx: 3,
             sections: WasmCodeSections {
                 types,
                 functions,
@@ -548,26 +522,18 @@ impl WasmCode {
         self.module.finish()
     }
 
-    fn open_function(&mut self, n_params: u32) {
+    fn open_function(&mut self) {
         self.current_func = Function::new([]);
-        self.current_func_n_params = n_params;
+        // self.current_func_n_params = n_params;
     }
 
-    fn close_function(&mut self) {
-        let mut func_params = vec![];
-        for _ in 0..self.current_func_n_params {
-            func_params.push(ValType::I32);
-        }
+    fn close_function(&mut self, func_idx: u32) {
+        // let mut func_params = vec![];
+        // for _ in 0..self.current_func_n_params {
+        //     func_params.push(ValType::I32);
+        // }
 
-        self.sections
-            .types
-            .ty()
-            .func_type(&FuncType::new(func_params, [ValType::I32]));
-
-        let type_index = self.sections.types.len() - 1;
-
-        self.sections.functions.function(type_index);
-
+        self.sections.functions.function(LISP_FUNC_SIG_TYPE_IDX);
         self.current_func.instruction(&Instruction::End);
         self.sections.code.function(&self.current_func);
     }
@@ -582,12 +548,20 @@ impl WasmCode {
         let instruction = Instruction::I32Const(n);
         self.current_func.instruction(&instruction);
     }
+
+    fn generate_unique_label() -> String {
+        random_hash(12)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Var {
+    Bound(u32),
+    Free(u32, u32),
 }
 
 struct Environment {
-    scopes: Vec<HashMap<String, bool>>,
-    lambdas_count: u32,
-    current_closure_context: Option<Vec<String>>,
+    scopes: Vec<HashMap<String, Var>>,
 }
 
 #[derive(Clone)]
@@ -603,8 +577,6 @@ impl Environment {
         Self {
             // intialize with the top level scope
             scopes: vec![HashMap::new()],
-            lambdas_count: 0,
-            current_closure_context: None,
         }
     }
 
@@ -614,7 +586,6 @@ impl Environment {
 
     fn push_scope(&mut self) {
         self.scopes.push(HashMap::new());
-        self.lambdas_count += 1;
     }
 
     fn pop_scope(&mut self) {
@@ -623,11 +594,11 @@ impl Environment {
         }
     }
 
-    fn define_local(&mut self, name: String, ty: bool) -> u32 {
+    fn define_bound(&mut self, name: String, index: u32) -> u32 {
         let idx = (self.scopes.len() + 1) as u32;
 
         if let Some(scope) = self.scopes.last_mut() {
-            scope.insert(name, ty);
+            scope.insert(name, Var::Bound(index));
         } else {
             panic!("define local")
         }
@@ -635,10 +606,22 @@ impl Environment {
         idx
     }
 
-    fn resolve(&self, name: &str) -> Option<usize> {
+    fn define_free(&mut self, name: String, index: u32, scope_index: u32) -> u32 {
+        let idx = (self.scopes.len() + 1) as u32;
+
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.insert(name, Var::Free(index, scope_index));
+        } else {
+            panic!("define free")
+        }
+
+        idx
+    }
+
+    fn resolve(&mut self, name: &str) -> Option<(Var, u32)> {
         for (i, scope) in self.scopes.iter().rev().enumerate() {
-            if let Some(info) = scope.get(name) {
-                return Some(i);
+            if let Some(var) = scope.get(name) {
+                return Some((*var, i as u32));
             }
         }
         None
