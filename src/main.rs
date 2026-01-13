@@ -17,7 +17,10 @@ fn main() {
     (let ((x (left 3 6)) (y 3)) (right x y))
     ";
 
-    let code3 = "(define sum (lambda () 4 5))  (sum)";
+    let code3 = "
+        (define sum (lambda (a b) (+ a b)))
+        (sum 3 6)
+    ";
 
     let ast = syntax_analysis::parse(code3.into());
     println!("{:?}", ast);
